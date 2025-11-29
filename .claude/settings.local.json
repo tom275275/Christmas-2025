@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(start \"\" \"C:\\Users\\tschr\\OneDrive\\Documents\\Coding\\coding-projects\\Christmas 2025\\index.html\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -275,9 +275,10 @@
             }, [people, isLoaded, saveToCloud]);
 
             const addPerson = () => {
+                const newPersonId = `person-${Date.now()}`;
                 const newPerson = {
-                    id: `person-${Date.now()}`,
-                    recipient: 'New Person',
+                    id: newPersonId,
+                    recipient: '',
                     assignedTo: '',
                     gifts: [{
                         id: `gift-${Date.now()}`,
@@ -290,7 +291,16 @@
                         expectedDelivery: ''
                     }]
                 };
-                setPeople([...people, newPerson]);
+                setPeople(prevPeople => [...prevPeople, newPerson]);
+
+                // Auto-focus the name input after React renders
+                setTimeout(() => {
+                    const input = document.querySelector(`input[value=""]`);
+                    if (input) {
+                        input.focus();
+                        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }, 100);
             };
 
             const addGiftToPerson = (personId) => {
@@ -305,7 +315,7 @@
                     expectedDelivery: ''
                 };
 
-                setPeople(people.map(p => {
+                setPeople(prevPeople => prevPeople.map(p => {
                     if (p.id === personId) {
                         return { ...p, gifts: [...p.gifts, newGift] };
                     }
@@ -314,11 +324,11 @@
             };
 
             const updatePerson = (personId, field, value) => {
-                setPeople(people.map(p => p.id === personId ? { ...p, [field]: value } : p));
+                setPeople(prevPeople => prevPeople.map(p => p.id === personId ? { ...p, [field]: value } : p));
             };
 
             const updateGift = (personId, giftId, field, value) => {
-                setPeople(people.map(p => {
+                setPeople(prevPeople => prevPeople.map(p => {
                     if (p.id === personId) {
                         return {
                             ...p,
@@ -330,26 +340,32 @@
             };
 
             const deletePerson = (personId) => {
-                const person = people.find(p => p.id === personId);
-                if (window.confirm(`Remove ${person.recipient} and all their gifts from the list?`)) {
-                    setPeople(people.filter(p => p.id !== personId));
-                }
+                setPeople(prevPeople => {
+                    const person = prevPeople.find(p => p.id === personId);
+                    if (window.confirm(`Remove ${person.recipient} and all their gifts from the list?`)) {
+                        return prevPeople.filter(p => p.id !== personId);
+                    }
+                    return prevPeople;
+                });
             };
 
             const deleteGift = (personId, giftId) => {
-                const person = people.find(p => p.id === personId);
-                if (person.gifts.length === 1) {
-                    if (window.confirm(`This is the last gift for ${person.recipient}. Remove the entire person from the list?`)) {
-                        deletePerson(personId);
-                    }
-                } else {
-                    setPeople(people.map(p => {
-                        if (p.id === personId) {
-                            return { ...p, gifts: p.gifts.filter(g => g.id !== giftId) };
+                setPeople(prevPeople => {
+                    const person = prevPeople.find(p => p.id === personId);
+                    if (person.gifts.length === 1) {
+                        if (window.confirm(`This is the last gift for ${person.recipient}. Remove the entire person from the list?`)) {
+                            return prevPeople.filter(p => p.id !== personId);
                         }
-                        return p;
-                    }));
-                }
+                        return prevPeople;
+                    } else {
+                        return prevPeople.map(p => {
+                            if (p.id === personId) {
+                                return { ...p, gifts: p.gifts.filter(g => g.id !== giftId) };
+                            }
+                            return p;
+                        });
+                    }
+                });
             };
 
             const nextStatus = (personId, giftId, current) => {
