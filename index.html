@@ -293,9 +293,9 @@
                 };
                 setPeople(prevPeople => [...prevPeople, newPerson]);
 
-                // Auto-focus the name input after React renders
+                // Auto-focus the name input after React renders and sorting completes
                 setTimeout(() => {
-                    const input = document.querySelector(`input[value=""]`);
+                    const input = document.querySelector(`input[data-person-id="${newPersonId}"]`);
                     if (input) {
                         input.focus();
                         input.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -304,8 +304,9 @@
             };
 
             const addGiftToPerson = (personId) => {
+                const newGiftId = `gift-${Date.now()}`;
                 const newGift = {
-                    id: `gift-${Date.now()}`,
+                    id: newGiftId,
                     item: '',
                     price: 0,
                     budget: 0,
@@ -321,6 +322,15 @@
                     }
                     return p;
                 }));
+
+                // Auto-focus the gift item input after React renders
+                setTimeout(() => {
+                    const input = document.querySelector(`input[data-gift-id="${newGiftId}"]`);
+                    if (input) {
+                        input.focus();
+                        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }, 100);
             };
 
             const updatePerson = (personId, field, value) => {
@@ -475,7 +485,12 @@
 
             // Sorting logic
             const getSortedPeople = () => {
-                const sorted = [...people];
+                // Separate empty recipients (new/being edited) from named recipients
+                const emptyRecipients = people.filter(p => !p.recipient || p.recipient.trim() === '');
+                const namedRecipients = people.filter(p => p.recipient && p.recipient.trim() !== '');
+
+                // Sort only the named recipients
+                const sorted = [...namedRecipients];
 
                 if (sortBy === 'recipient') {
                     sorted.sort((a, b) => a.recipient.localeCompare(b.recipient));
@@ -504,7 +519,8 @@
                     });
                 }
 
-                return sorted;
+                // Empty recipients always appear at the top, unsorted
+                return [...emptyRecipients, ...sorted];
             };
 
             const sortedPeople = getSortedPeople();
@@ -624,6 +640,7 @@
                                                         type="text"
                                                         value={person.recipient}
                                                         onChange={(e) => updatePerson(person.id, 'recipient', e.target.value)}
+                                                        data-person-id={person.id}
                                                         className={`font-bold text-lg bg-transparent border-none outline-none focus:bg-white focus:px-2 focus:py-1 focus:rounded focus:ring-2 focus:ring-indigo-500 transition-all ${allWrapped ? 'text-slate-500 line-through' : 'text-slate-800'}`}
                                                         style={{ width: `${Math.max(person.recipient.length, 10)}ch` }}
                                                     />
@@ -679,6 +696,7 @@
                                                                 type="text"
                                                                 value={gift.item}
                                                                 onChange={(e) => updateGift(person.id, gift.id, 'item', e.target.value)}
+                                                                data-gift-id={gift.id}
                                                                 placeholder="Gift item..."
                                                                 className="flex-grow font-medium text-slate-800 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-2 focus:py-1 focus:rounded focus:ring-2 focus:ring-indigo-500 transition-all"
                                                             />
