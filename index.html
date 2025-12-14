@@ -136,6 +136,7 @@
 
         function GiftTracker() {
             const [people, setPeople] = useState([]);
+            const [unassignedGifts, setUnassignedGifts] = useState([]); // Gifts not yet assigned to anyone
             const [isImportModalOpen, setIsImportModalOpen] = useState(false);
             const [importText, setImportText] = useState('');
             const [sortBy, setSortBy] = useState('recipient'); // 'recipient', 'status', 'assigned'
@@ -183,6 +184,25 @@
                 return Array.from(peopleMap.values());
             };
 
+            // Helper to extract people and unassignedGifts from stored data
+            const parseStoredData = (record) => {
+                // New format: { people: [...], unassignedGifts: [...] }
+                if (record && record.people !== undefined) {
+                    return {
+                        people: migrateData(record.people || []),
+                        unassignedGifts: record.unassignedGifts || []
+                    };
+                }
+                // Old format: just an array of people
+                if (Array.isArray(record)) {
+                    return {
+                        people: migrateData(record),
+                        unassignedGifts: []
+                    };
+                }
+                return { people: [], unassignedGifts: [] };
+            };
+
             // Load from JSONBin on mount
             useEffect(() => {
                 const loadData = async () => {
@@ -191,8 +211,9 @@
                     if (cached) {
                         try {
                             const parsedData = JSON.parse(cached);
-                            const migratedData = migrateData(parsedData);
-                            setPeople(migratedData);
+                            const { people: loadedPeople, unassignedGifts: loadedUnassigned } = parseStoredData(parsedData);
+                            setPeople(loadedPeople);
+                            setUnassignedGifts(loadedUnassigned);
                         } catch (e) {}
                     }
 
@@ -206,12 +227,10 @@
 
                         if (response.ok) {
                             const data = await response.json();
-                            let remotePeople = data.record;
-                            if (Array.isArray(remotePeople)) {
-                                remotePeople = migrateData(remotePeople);
-                                setPeople(remotePeople);
-                                localStorage.setItem('tom_gift_tracker_v1', JSON.stringify(remotePeople));
-                            }
+                            const { people: remotePeople, unassignedGifts: remoteUnassigned } = parseStoredData(data.record);
+                            setPeople(remotePeople);
+                            setUnassignedGifts(remoteUnassigned);
+                            localStorage.setItem('tom_gift_tracker_v1', JSON.stringify({ people: remotePeople, unassignedGifts: remoteUnassigned }));
                             setSyncStatus('synced');
                         } else {
                             setSyncStatus('error');
@@ -252,12 +271,14 @@
                 }
             }, []);
 
-            // Debounced save whenever people change
+            // Debounced save whenever people or unassignedGifts change
             useEffect(() => {
                 if (!isLoaded) return;
 
+                const dataToSave = { people, unassignedGifts };
+
                 // Always save to localStorage immediately
-                localStorage.setItem('tom_gift_tracker_v1', JSON.stringify(people));
+                localStorage.setItem('tom_gift_tracker_v1', JSON.stringify(dataToSave));
 
                 // Debounce cloud save by 1 second
                 if (saveTimeoutRef.current) {
@@ -265,7 +286,7 @@
                 }
 
                 saveTimeoutRef.current = setTimeout(() => {
-                    saveToCloud(people);
+                    saveToCloud(dataToSave);
                 }, 1000);
 
                 return () => {
@@ -273,7 +294,7 @@
                         clearTimeout(saveTimeoutRef.current);
                     }
                 };
-            }, [people, isLoaded, saveToCloud]);
+            }, [people, unassignedGifts, isLoaded, saveToCloud]);
 
             const addPerson = () => {
                 const newPersonId = `person-${Date.now()}`;
@@ -386,6 +407,65 @@
                 updateGift(personId, giftId, 'status', next);
             };
 
+            // --- Unassigned Gifts Management ---
+            const addUnassignedGift = () => {
+                const newGiftId = `gift-${Date.now()}`;
+                const newGift = {
+                    id: newGiftId,
+                    item: '',
+                    price: 0,
+                    budget: 0,
+                    status: 'Idea',
+                    link: '',
+                    notes: '',
+                    expectedDelivery: ''
+                };
+
+                setUnassignedGifts(prev => [...prev, newGift]);
+
+                // Auto-focus the gift item input after React renders
+                setTimeout(() => {
+                    const input = document.querySelector(`input[data-unassigned-gift-id="${newGiftId}"]`);
+                    if (input) {
+                        input.focus();
+                        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }, 100);
+            };
+
+            const updateUnassignedGift = (giftId, field, value) => {
+                setUnassignedGifts(prev => prev.map(g => g.id === giftId ? { ...g, [field]: value } : g));
+            };
+
+            const deleteUnassignedGift = (giftId) => {
+                if (window.confirm('Remove this unassigned gift?')) {
+                    setUnassignedGifts(prev => prev.filter(g => g.id !== giftId));
+                }
+            };
+
+            const nextUnassignedStatus = (giftId, current) => {
+                const cycle = ['Idea', 'Ordered', 'Received', 'Wrapped'];
+                const idx = cycle.indexOf(current);
+                const next = cycle[(idx + 1) % cycle.length];
+                updateUnassignedGift(giftId, 'status', next);
+            };
+
+            const assignGiftToPerson = (giftId, personId) => {
+                const gift = unassignedGifts.find(g => g.id === giftId);
+                if (!gift || !personId) return;
+
+                // Remove from unassigned
+                setUnassignedGifts(prev => prev.filter(g => g.id !== giftId));
+
+                // Add to person's gifts
+                setPeople(prevPeople => prevPeople.map(p => {
+                    if (p.id === personId) {
+                        return { ...p, gifts: [...p.gifts, gift] };
+                    }
+                    return p;
+                }));
+            };
+
             const generateMarkdown = () => {
                 let md = `# 🎄 Tom's Gift List 2025\n\n`;
 
@@ -396,6 +476,10 @@
                         totalSpent += Number(gift.price) || 0;
                         totalBudget += Number(gift.budget) || 0;
                     });
+                });
+                unassignedGifts.forEach(gift => {
+                    totalSpent += Number(gift.price) || 0;
+                    totalBudget += Number(gift.budget) || 0;
                 });
 
                 md += `**Total Spent:** $${totalSpent} | **Total Budget:** $${totalBudget}\n\n`;
@@ -410,6 +494,18 @@
                         md += `| ${statusIcon} ${gift.status} | ${person.recipient} | ${assigned} | ${gift.item} | $${gift.price} | $${gift.budget} | ${delivery} | ${gift.notes} ${gift.link ? `[Link](${gift.link})` : ''} |\n`;
                     });
                 });
+
+                // Include unassigned gifts in markdown export
+                if (unassignedGifts.length > 0) {
+                    md += `\n## 📦 Unassigned Gift Pool\n\n`;
+                    md += `| Status | Gift Idea | Price | Budget | Delivery | Notes |\n`;
+                    md += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+                    unassignedGifts.forEach(gift => {
+                        const statusIcon = gift.status === 'Wrapped' ? '✅' : gift.status === 'Ordered' ? '🚚' : gift.status === 'Received' ? '📦' : '⚪';
+                        const delivery = gift.expectedDelivery || '-';
+                        md += `| ${statusIcon} ${gift.status} | ${gift.item} | $${gift.price} | $${gift.budget} | ${delivery} | ${gift.notes} ${gift.link ? `[Link](${gift.link})` : ''} |\n`;
+                    });
+                }
                 return md;
             };
 
@@ -422,21 +518,19 @@
             const parseImport = () => {
                 try {
                     const data = JSON.parse(importText);
-                    if (Array.isArray(data)) {
-                        const migratedData = migrateData(data);
-                        setPeople(migratedData);
-                        setIsImportModalOpen(false);
-                        setImportText('');
-                        alert("Imported successfully!");
-                        return;
-                    }
+                    const { people: importedPeople, unassignedGifts: importedUnassigned } = parseStoredData(data);
+                    setPeople(importedPeople);
+                    setUnassignedGifts(importedUnassigned);
+                    setIsImportModalOpen(false);
+                    setImportText('');
+                    alert("Imported successfully!");
                 } catch (e) {
                     alert("Could not parse data. Please use the JSON format for importing data.");
                 }
             };
 
             const copyJSON = () => {
-                const json = JSON.stringify(people, null, 2);
+                const json = JSON.stringify({ people, unassignedGifts }, null, 2);
                 navigator.clipboard.writeText(json);
                 alert("Copied raw data (JSON) to clipboard!");
             };
@@ -452,12 +546,10 @@
 
                     if (response.ok) {
                         const data = await response.json();
-                        let remotePeople = data.record;
-                        if (Array.isArray(remotePeople)) {
-                            remotePeople = migrateData(remotePeople);
-                            setPeople(remotePeople);
-                            localStorage.setItem('tom_gift_tracker_v1', JSON.stringify(remotePeople));
-                        }
+                        const { people: remotePeople, unassignedGifts: remoteUnassigned } = parseStoredData(data.record);
+                        setPeople(remotePeople);
+                        setUnassignedGifts(remoteUnassigned);
+                        localStorage.setItem('tom_gift_tracker_v1', JSON.stringify({ people: remotePeople, unassignedGifts: remoteUnassigned }));
                         setSyncStatus('synced');
                     } else {
                         setSyncStatus('error');
@@ -467,7 +559,7 @@
                 }
             };
 
-            // Calculations
+            // Calculations (includes both assigned and unassigned gifts)
             let totalBudget = 0;
             let totalSpent = 0;
             let totalGifts = 0;
@@ -480,6 +572,14 @@
                     totalGifts++;
                     if (gift.status === 'Wrapped') wrappedGifts++;
                 });
+            });
+
+            // Include unassigned gifts in totals
+            unassignedGifts.forEach(gift => {
+                totalBudget += Number(gift.budget) || 0;
+                totalSpent += Number(gift.price) || 0;
+                totalGifts++;
+                if (gift.status === 'Wrapped') wrappedGifts++;
             });
 
             const percentComplete = Math.round((wrappedGifts / totalGifts) * 100) || 0;
@@ -625,6 +725,146 @@
                                 </button>
                                 <button onClick={() => setSortBy('assigned')} className={`px-3 py-1 text-sm font-medium rounded transition-colors ${sortBy === 'assigned' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
                                     Assigned
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Unassigned Gifts Pool */}
+                    <div className="max-w-5xl mx-auto px-4 md:px-8 mb-6">
+                        <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl shadow-sm border border-amber-200">
+                            <div className="p-4 md:p-6 pb-3">
+                                <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 bg-amber-100 rounded-lg">
+                                            <Icons.Package className="w-5 h-5 text-amber-600" />
+                                        </div>
+                                        <div>
+                                            <h2 className="font-bold text-lg text-slate-800">Unassigned Gift Pool</h2>
+                                            <p className="text-xs text-slate-500">Items bought on sale or ready to re-gift</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-4 text-sm">
+                                        <div className="text-right">
+                                            <div className="text-slate-500 text-xs">Items</div>
+                                            <div className="font-bold text-slate-800">{unassignedGifts.length}</div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-slate-500 text-xs">Value</div>
+                                            <div className="font-bold text-slate-800">
+                                                ${unassignedGifts.reduce((sum, g) => sum + (Number(g.price) || 0), 0)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="px-4 md:px-6 pb-4 space-y-3">
+                                {unassignedGifts.map(gift => (
+                                    <div key={gift.id} className="p-4 rounded-lg border bg-white border-amber-200 hover:border-amber-300 transition-colors">
+                                        <div className="flex flex-col gap-3">
+                                            {/* Row 1: Status + Item + Assign dropdown */}
+                                            <div className="flex gap-3 items-start">
+                                                <button onClick={() => nextUnassignedStatus(gift.id, gift.status)} className="flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity mt-1" title="Click to cycle status">
+                                                    <StatusBadge status={gift.status} />
+                                                </button>
+                                                <input
+                                                    type="text"
+                                                    value={gift.item}
+                                                    onChange={(e) => updateUnassignedGift(gift.id, 'item', e.target.value)}
+                                                    data-unassigned-gift-id={gift.id}
+                                                    placeholder="Gift item..."
+                                                    className="flex-grow font-medium text-slate-800 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-2 focus:py-1 focus:rounded focus:ring-2 focus:ring-amber-500 transition-all"
+                                                />
+                                                <select
+                                                    value=""
+                                                    onChange={(e) => {
+                                                        if (e.target.value) {
+                                                            assignGiftToPerson(gift.id, e.target.value);
+                                                        }
+                                                    }}
+                                                    className="text-xs px-2 py-1.5 rounded-lg font-medium border border-amber-300 bg-amber-50 text-amber-700 cursor-pointer hover:bg-amber-100 transition-colors"
+                                                    title="Assign to person"
+                                                >
+                                                    <option value="">Assign to...</option>
+                                                    {people.filter(p => p.recipient).map(p => (
+                                                        <option key={p.id} value={p.id}>{p.recipient}</option>
+                                                    ))}
+                                                </select>
+                                                <button onClick={() => deleteUnassignedGift(gift.id)} className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete gift">
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+
+                                            {/* Row 2: Budget + Price + Link */}
+                                            <div className="flex gap-3 items-center text-sm flex-wrap">
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-slate-500 text-xs">Budget:</span>
+                                                    <span className="text-slate-500">$</span>
+                                                    <input
+                                                        type="number"
+                                                        value={gift.budget}
+                                                        onChange={(e) => updateUnassignedGift(gift.id, 'budget', Number(e.target.value))}
+                                                        className="w-16 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-1 focus:rounded focus:ring-2 focus:ring-amber-500 font-medium transition-all"
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-slate-500 text-xs">Spent:</span>
+                                                    <span className={gift.price > gift.budget && gift.budget > 0 ? 'text-red-600' : 'text-slate-800'}>$</span>
+                                                    <input
+                                                        type="number"
+                                                        value={gift.price}
+                                                        onChange={(e) => updateUnassignedGift(gift.id, 'price', Number(e.target.value))}
+                                                        className={`w-16 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-1 focus:rounded focus:ring-2 focus:ring-amber-500 font-bold transition-all ${gift.price > gift.budget && gift.budget > 0 ? 'text-red-600' : 'text-slate-800'}`}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-1 flex-grow">
+                                                    <span className="text-slate-400 text-xs">🔗</span>
+                                                    <input
+                                                        type="text"
+                                                        value={gift.link}
+                                                        onChange={(e) => updateUnassignedGift(gift.id, 'link', e.target.value)}
+                                                        placeholder="https://..."
+                                                        className="flex-grow text-xs text-blue-500 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-2 focus:py-1 focus:rounded focus:ring-2 focus:ring-amber-500 transition-all"
+                                                    />
+                                                    {gift.link && (
+                                                        <a href={gift.link} target="_blank" rel="noopener noreferrer" className="p-1 text-slate-400 hover:text-blue-500" title="Open link">
+                                                            <Icons.ExternalLink className="w-3 h-3" />
+                                                        </a>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Row 3: Delivery + Notes */}
+                                            <div className="flex gap-3 items-start text-xs flex-wrap">
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-slate-400">🚚</span>
+                                                    <input
+                                                        type="date"
+                                                        value={gift.expectedDelivery || ''}
+                                                        onChange={(e) => updateUnassignedGift(gift.id, 'expectedDelivery', e.target.value)}
+                                                        className="text-xs text-slate-500 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-2 focus:py-1 focus:rounded focus:ring-2 focus:ring-amber-500 transition-all"
+                                                    />
+                                                </div>
+                                                <div className="flex items-start gap-1 flex-grow">
+                                                    <span className="text-slate-400 mt-0.5">📝</span>
+                                                    <input
+                                                        type="text"
+                                                        value={gift.notes}
+                                                        onChange={(e) => updateUnassignedGift(gift.id, 'notes', e.target.value)}
+                                                        placeholder="Notes..."
+                                                        className="flex-grow text-xs text-slate-500 bg-transparent border-none outline-none focus:bg-slate-50 focus:px-2 focus:py-1 focus:rounded focus:ring-2 focus:ring-amber-500 transition-all"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                <button onClick={addUnassignedGift} className="w-full py-3 border-2 border-dashed border-amber-300 rounded-lg text-amber-500 text-sm font-medium hover:border-amber-400 hover:text-amber-600 hover:bg-amber-50 transition-all flex items-center justify-center gap-2">
+                                    <Icons.Plus className="w-4 h-4" /> Add Unassigned Gift
                                 </button>
                             </div>
                         </div>
